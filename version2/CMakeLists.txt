@@ -15,14 +15,14 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_options(-Wall -O2)
 
 # 查找pthread库
-find_package(Threads REQUIRED)
+find_package(Threads Rversion2/includeEQUIRED)
 
 # 设置目录
 set(SRC_DIR ${CMAKE_SOURCE_DIR}/src)
 set(INC_DIR ${CMAKE_SOURCE_DIR}/include)
 set(TEST_DIR ${CMAKE_SOURCE_DIR}/tests)
 
-# 源文件
+# 指明源文件
 file(GLOB SOURCES "${SRC_DIR}/*.cpp")
 
 # 添加头文件目录
