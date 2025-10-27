@@ -41,7 +41,25 @@ void* PageCache::allocateSpan(size_t numPages)
 
             span->numPages = numPages;
         }
+
+        // 记录span信息用于回收
+        spanMap_[span->pageAddr] = span;
+        return span->pageAddr;
     }
+
+    // 没有合适的空闲span，想系统申请
+    void* memory = systemAlloc(numPages);
+    if(!memory) return nullptr;
+
+    // 创建新的span
+    Span* span = new Span;
+    span->pageAddr = memory;
+    span->numPages = numPages;
+    span->next = nullptr;
+
+    // 记录span信息用于回收
+    spanMap_[memory] = span;
+    return memory;
 }
 
 
