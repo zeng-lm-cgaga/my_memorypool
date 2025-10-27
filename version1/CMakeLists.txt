@@ -1,10 +1,4 @@
-mkdir build
-cd build
-cmake ..
-makemkdir build
-cd build
-cmake ..
-makecmake_minimum_required(VERSION 3.10)
+cmake_minimum_required(VERSION 3.10)
 project(my_memorypool)
 
 # 设置C++标准
@@ -15,7 +9,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_options(-Wall -O2)
 
 # 查找pthread库
-find_package(Threads Rversion2/includeEQUIRED)
+find_package(Threads REQUIRED)
 
 # 设置目录
 set(SRC_DIR ${CMAKE_SOURCE_DIR}/src)
