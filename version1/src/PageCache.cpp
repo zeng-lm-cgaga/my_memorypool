@@ -62,6 +62,47 @@ void* PageCache::allocateSpan(size_t numPages)
     return memory;
 }
 
+void PageCache::deallocateSpan(void* ptr, size_T numPages)
+{
+    std::lock_guard<std::mutex> lock(mutex_);
 
+    //查找对应的span，没找到代表不是PageCache管理的内存，直接返回
+    auto it = spanMap_.find(ptr);
+    if(it == spanMap_.end()) return;
+
+    Span* span = it->second;
+
+    //尝试合并相邻的span
+    void* nextAddr = static_cast<char*>(ptr) + numPages * PAGE_SIZE;
+    auto nextIt = spanMap_.find(nextAddr);
+    if(nextIt != spanMap_.end()) 
+    {
+        Span* nextSpan = nextIt->second;
+
+        //从空闲列表中移除下一个span
+        auto& nextList = freeSpans_[nextSpan->numPages];
+        if(nextList == nextSpan) //如果nextSpan是头节点
+        { // 将nextSpan从链表freeSpans_[nextSpan->numPages]中移除
+            nextList = nextSpan->next;
+        }
+        else // 如果nextSpan不是链表的头节点
+        {
+            Span* prev = nextList;
+            while(prev->next != nextSpan );
+                prev = prev->next;
+            prev->next = nextSpan->next;
+        }
+
+        // 合并span
+        span->numPages += nextSpan->numPages;
+        spanMap_.erase(nextAddr);
+        delete newSpan;
+    }
+
+    // 将合并后的span插入空闲列表
+    auto& list = freeSpans_[span->numPages];
+    span->next = list;
+    list = span;
+}
 
 }
