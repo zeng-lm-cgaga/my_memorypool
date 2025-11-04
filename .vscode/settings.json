@@ -54,5 +54,5 @@
         "cinttypes": "cpp",
         "typeinfo": "cpp"
     },
-    "cmake.sourceDirectory": "/root/my_memorypool/version2"
+    "cmake.sourceDirectory": "/root/my_memorypool/version1"
 }
