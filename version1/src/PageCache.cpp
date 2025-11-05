@@ -62,7 +62,7 @@ void* PageCache::allocateSpan(size_t numPages)
     return memory;
 }
 
-void PageCache::deallocateSpan(void* ptr, size_T numPages)
+void PageCache::deallocateSpan(void* ptr, size_t numPages)
 {
     std::lock_guard<std::mutex> lock(mutex_);
 
@@ -105,4 +105,19 @@ void PageCache::deallocateSpan(void* ptr, size_T numPages)
     list = span;
 }
 
+
+void * PageCache::systemAlloc(size_t numPages)
+{
+    size_t size = numPages * PAGE_SIZE;
+
+    //使用mmap分配内存
+    void* ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE,
+                    MAP_PRIVATE | MAP_ANONYMOUS, -1 , 0);
+    if(ptr == MAP_FAILED) return nullptr;
+
+    //清零内存
+    memset(ptr, 0, size);
+    return ptr;
 }
+
+}//namespace my_memorypool
