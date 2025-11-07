@@ -182,6 +182,19 @@ void CentralCache::returnRange(void* start, size_t size, size_t index)
         locks_[index].clear(std::memory_order_release);
 }
 
+bool CentralCache::shouldPerformDelayedReturn(size_t index, size_t currentCount, 
+        std::chrono::steady_clock::time_point currentTime)
+{
+    // 基于计数和时间的双重检查
+    if(currentCount >= MAX_DELAY_COUNT)
+    {
+        return true;
+    }
+
+    auto lastTime = lastReturnTimes_[index];
+    return (currentTime - lastTime) >= DELAY_INTERVAL;
+}
+
 void CentralCache::performDelayReturn(size_t index)
 {
     // 重置延迟计数
@@ -203,10 +216,91 @@ void CentralCache::performDelayReturn(size_t index)
         currentBlock = *reinterpret_cast<void**>(currentBlock);
     }
 
+    // 更新每个span的空闲计数并检查是否可以归还
     for(const auto& [tracker, newFreeBlocks] : spanFreeCounts)
     {
         updateSpanFreeCount(tracker,newFreeBlocks,index);
     }
-
 }
+
+void CentralCache::updateSpanFreeCount(SpanTracker* tracker, size_t newFreeBlocks, size_t index)
+{
+    size_t oldFreeCount = tracker->freeCount.load(std::memory_order_relaxed);
+    size_t newFreeCount = oldFreeCount + newFreeBlocks;
+    tracker->freeCount.store(newFreeCount, std::memory_order_release);
+
+    // 当所有块都空闲时，归还span
+    if(newFreeCount == tracker->blockCount.load(std::memory_order_relaxed))
+    {
+        void* spanAddr = tracker->spanAddr.load(std::memory_order_relaxed);
+        size_t numPages = tracker->numPages.load(std::memory_order_relaxed);
+
+        // 从自由链表中移除这些块
+        void* head = centralFreeList_[index].load(std::memory_order_relaxed);
+        void* newHead = nullptr;
+        void* prev = nullptr;
+        void* current = head;
+
+        while(current)
+        {
+            void* next = *reinterpret_cast<void**>(current);
+            if(current >= spanAddr &&
+                current < static_cast<char*>(spanAddr) + numPages * PageCache::PAGE_SIZE)
+            {
+                if(prev)
+                {
+                    *reinterpret_cast<void**>(prev) = next;
+                }
+                else
+                {
+                    newHead = next;
+                }
+            }
+            else
+            {
+                prev = current;
+            }
+            current = next
+        }
+
+        centralFreeList_[index].store(newHead,std::memory_order_release);
+        PageCache::getInstance().deallocateSpan(spanAddr, numPages);
+    }
+}
+
+void* CentralCache::fetchFromPageCache(size_t size)
+{
+    // 实际需要的页数
+    size_t numPages = (size + PageCache::PAGE_SIZE - 1) / PageCache::PAGE_SIZE;
+
+    // 决定分配策略
+    if(size <= SPAN_PAGES * PageCache::PAGE_SIZE)
+    {
+        // 小于32KB的请求，固定使用8页
+        return PageCache::getInstance().allocateSpan(SPAN_PAGES);
+    }
+    else
+    {
+        // 大于32KB的请求，按实际需求分配
+        return PageCache::getInstance.allocateSpan(numPages);
+    }
+}
+
+SpanTracker* CentralCache::getSpanTracker(void* blockAddr)
+{
+    // 遍历spanTrackers_数组，找到blockAddr所属的span
+    for(size_t i = 0 ; i < spanCount_.load(std::memory_order_relaxed); ++i)
+    {
+        void* spanAddr = spanTrackers_[i].spanAddr.load(std::memory_order_relaxed);
+        size_t numPages = spanTrackers_[i].numPages.load(std::memory_order_relaxed);
+
+        if(blockAddr >= spanAddr &&
+            blockAddr < static_cast<char*>(spanAddr) + numPages * PageCache::PAGE_SIZE)
+        {
+            return &spanTrackers_[i];
+        }
+    }
+    return nullptr;
+}
+
 }
