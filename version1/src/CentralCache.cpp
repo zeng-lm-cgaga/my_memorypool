@@ -7,7 +7,7 @@
 namespace my_memorypool
 {
 
-const std::crono::milliseconds CentralCache::DELAY_INTERVAL{1000};
+const std::chrono::milliseconds CentralCache::DELAY_INTERVAL{1000};
 
 // 每次从PageCache获取span大小（以页为单位）
 static const size_t SPAN_PAGES = 8;
@@ -137,4 +137,76 @@ void* CentralCache::fetchRange(size_t index)
     return result;
 } 
 
+void CentralCache::returnRange(void* start, size_t size, size_t index)
+{
+    if(!start || index >= FREE_LIST_SIZE)
+        return;
+
+        size_t blockSize = (index + 1) * ALIGNMENT;
+        size_t blockCount = size / blockSize;
+
+        while(locks_[index].test_and_set(std::memory_order_acquire))
+        {
+            std::this_thread::yield();
+        }
+
+        try
+        {
+            // 1. 将归还的链表连接到中心缓存
+            void* end = start;
+            size_t count = 1;
+            while(*reinterpret_cast<void**>(end) != nullptr && count < blockCount) {
+                end = *reinterpret_cast<void**>(end);
+                count++;
+            }
+            void* current = centralFreeList_[index].load(std::memory_order_relaxed);
+            *reinterpret_cast<void**>(end) = current; 头插法（将原有链表接在归还链表后边）
+            centralFreeList_[index].store(start, std::memory_order_release);
+
+            // 2. 更新延迟计数
+            size_t currentCount = delayCounts_[index].fetch_add(1, std::memory_order_relaxed) + 1;
+            auto currentTime =std::chrono::steady_clock::now();
+
+            // 3. 检查是否需要执行延迟归还
+            if(shouldPerformDelayedReturn(index, currentCount, currentTime))
+            {
+                performDelayReturn(index);
+            }
+        }
+        catch (...)
+        {
+            locks_[index].clear(std::memory_order_release);
+            throw;
+        }
+
+        locks_[index].clear(std::memory_order_release);
+}
+
+void CentralCache::performDelayReturn(size_t index)
+{
+    // 重置延迟计数
+    delayCounts_[index].store(0,std::memory_order_relaxed);
+    // 更新最后归还时间
+    lastReturnTimes_[index] = std::chrono::steady_clock::now();
+
+    // 统计每个span的空闲块数
+    std::unordered_map<SpanTracker*, size_t> spanFreeCounts;
+    void* currentBlock = centralFreeList_[index].load(std::memory_order_relaxed);
+
+    while(currentBlock)
+    {
+        SpanTracker* tracker = getSpanTracker(currentBlock);
+        if(tracker)
+        {
+            spanFreeCounts[tracker]++;
+        }
+        currentBlock = *reinterpret_cast<void**>(currentBlock);
+    }
+
+    for(const auto& [tracker, newFreeBlocks] : spanFreeCounts)
+    {
+        updateSpanFreeCount(tracker,newFreeBlocks,index);
+    }
+
+}
 }
