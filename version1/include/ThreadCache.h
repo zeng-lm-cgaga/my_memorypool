@@ -1,5 +1,5 @@
-#progma once
-#include "common.h"
+#pragma once
+#include "Common.h"
 
 namespace my_memorypool
 {

@@ -55,7 +55,7 @@ void ThreadCache::deallocate(void* ptr, size_t size)
     // 判断是否需要将部分内存回收给中心缓存
     if(shouldReturnToCentralCache(index))
     {
-        returnToCentralCache()freeList_[index], size);
+        returnToCentralCache(freeList_[index], size);
     }
 }
 
@@ -64,7 +64,7 @@ bool ThreadCache::shouldReturnToCentralCache(size_t index)
 {
     // 设定阈值
     size_t threadcnt = 256;
-    retur (freeListSize_[index] > threadcnt);
+    return (freeListSize_[index] > threadcnt);
 }
 
 void* ThreadCache::fetchFromCenctralCache(size_t index)
@@ -140,7 +140,7 @@ void ThreadCache::returnToCentralCache(void* start, size_t size)
         // 将剩下部分返回给CentralCache
         if(returnNum > 0 && nextNode != nullptr)
         {
-            CentralCache::getInstance.returnRange(nextNode, returnNum * alignedSize, index);
+            CentralCache::getInstance().returnRange(nextNode, returnNum * alignedSize, index);
         }
     }
 }

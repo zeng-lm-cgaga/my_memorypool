@@ -7,7 +7,7 @@
 namespace  my_memorypool
 {
 constexpr std::size_t ALIGNMENT = 8;
-constexpr std::size_t MAX_SIZE = 256 * 1024; // 256KB
+constexpr std::size_t MAX_BYTES = 256 * 1024; // 256KB
 constexpr std::size_t FREE_LIST_SIZE = MAX_BYTES / ALIGNMENT; // ALIGNMENT等于指针void*的大小
 
 // 内存块头部信息

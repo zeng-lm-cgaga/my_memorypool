@@ -1,4 +1,4 @@
-#include <sys.mman.h>
+#include <sys/mman.h>
 #include "PageCache.h"
 #include <cstring>
 
@@ -11,7 +11,7 @@ void* PageCache::allocateSpan(size_t numPages)
 
     // 查找合适的空闲span
     // lower_bound函数返回第一个大于等于numPages的迭代器
-    auot if = freeSpans_.lower_bound(numPages);
+    auto it = freeSpans_.lower_bound(numPages);
     if(it != freeSpans_.end()) 
     {
         Span* span = it->second;
@@ -96,7 +96,7 @@ void PageCache::deallocateSpan(void* ptr, size_t numPages)
         // 合并span
         span->numPages += nextSpan->numPages;
         spanMap_.erase(nextAddr);
-        delete newSpan;
+        delete nextSpan;
     }
 
     // 将合并后的span插入空闲列表

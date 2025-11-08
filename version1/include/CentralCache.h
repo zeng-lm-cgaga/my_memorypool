@@ -1,4 +1,4 @@
-#progma once
+#pragma once
 #include "Common.h"
 #include <mutex>
 #include <unordered_map>
@@ -10,7 +10,7 @@ namespace my_memorypool
 {
 
 //使用无锁的span信息存储
-sturct SpanTracker {
+struct SpanTracker {
     std::atomic<void*> spanAddr{nullptr};
     std::atomic<size_t> numPages{0};
     std::atomic<size_t> blockCount{0};

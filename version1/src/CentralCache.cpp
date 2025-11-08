@@ -160,7 +160,7 @@ void CentralCache::returnRange(void* start, size_t size, size_t index)
                 count++;
             }
             void* current = centralFreeList_[index].load(std::memory_order_relaxed);
-            *reinterpret_cast<void**>(end) = current; 头插法（将原有链表接在归还链表后边）
+            *reinterpret_cast<void**>(end) = current; // 头插法（将原有链表接在归还链表后边）
             centralFreeList_[index].store(start, std::memory_order_release);
 
             // 2. 更新延迟计数
@@ -260,7 +260,7 @@ void CentralCache::updateSpanFreeCount(SpanTracker* tracker, size_t newFreeBlock
             {
                 prev = current;
             }
-            current = next
+            current = next;
         }
 
         centralFreeList_[index].store(newHead,std::memory_order_release);
@@ -282,7 +282,7 @@ void* CentralCache::fetchFromPageCache(size_t size)
     else
     {
         // 大于32KB的请求，按实际需求分配
-        return PageCache::getInstance.allocateSpan(numPages);
+        return PageCache::getInstance().allocateSpan(numPages);
     }
 }
 
