@@ -54,5 +54,5 @@
         "cinttypes": "cpp",
         "typeinfo": "cpp"
     },
-    "cmake.sourceDirectory": "/root/my_memorypool/version1"
+    "cmake.sourceDirectory": "/home/zenglm/proJects/my_memorypool/version1"
 }
