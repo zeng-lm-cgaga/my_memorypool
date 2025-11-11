@@ -237,7 +237,7 @@ void CentralCache::updateSpanFreeCount(SpanTracker* tracker, size_t newFreeBlock
 
         // 从自由链表中移除这些块
         void* head = centralFreeList_[index].load(std::memory_order_relaxed);
-        void* newHead = nullptr;
+        void* newHead = head;
         void* prev = nullptr;
         void* current = head;
 
