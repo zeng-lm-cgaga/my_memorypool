@@ -280,6 +280,25 @@ public:
 
             for(size_t i = 0; i < NUM_THREADS; ++i)
             {
+                thread.emplace_back(threadFunc, true);
+            }
+
+            for(auto& thread : therads)
+            {
+                thread.join()
+            }
+
+            std::cout << "New/Delete: " << std::fixed << std::setprecision(3)
+                      << t.elapsed() << " ms" << std::endl;
+        }
+
+        // 测试new/delete
+        {
+            Timer t;
+            std::vector<std::thread> threads;
+
+            for(size_t i = 0; i < NUM_THREADS; ++i)
+            {
                 thread.emplace_back(threadFunc, false);
             }
 
@@ -289,9 +308,181 @@ public:
             }
 
             std::cout << "New/Delete: " << std::fixed << std::setprecision(3)
-                      << t.elapsed() << "ms" << std::endl;
+                      << t.elapsed() << " ms" << std::endl;
         }
     }
 
     // 4. 混合大小测试
+    static vid testMixedSizes()
+    {
+        constexpr size_t NUM_ALLOCS = 100000;
+        // 按照内存池的设计特点，及将大小分为三类
+        //1.小对象：适合ThreadCache
+        //2.中对象：适合CentralCache
+        //3.大对象：适合PageCache
+
+        // 使用固定的测试数据
+        const size_t SMALL_SIZES[] = {8, 16, 32, 64, 128};
+        const size_t MEDIUM_SIZES[] = {256, 384, 512};
+        const size_t LARGE_SIZES[] = {1024, 2048, 4096};
+
+        const size_t NUM_SMALL = size_of(SMALL_SIZES) / size_of(SMALL_SIZES[0]);
+        const size_t NUM_MEDIUM = size_of(MEDIUM_SIZES) / size_of(MEDIUM_SIZES[0]);
+        const size_t NUM_LARGE = size_of(LARGE_SIZES) / size_of(LARGE_SIZES[0]);
+
+        std::cout << "\nTesting mixed size allocation (" << NUM_ALLOCS
+                  << " allocation with fixed sizes):" << std::endl; 
+        
+        // 测试内存池
+        {
+            Timer t;
+            // 按大小分类存储内存块
+            std::array<std::vector<std::pair<void*, size_t>>, NUM_SMALL + NUM_MEDIUM + NUM_LARGE> sizePtrs;
+            for(auto& ptrs : sizePtrs) {
+                ptrs.reserve(NUM_ALLOCS / (NUM_SMALL + NUM_MEDIUM + NUM_LARGE));
+            }
+
+            for(size_t i = 0; i < NUM_ALLOCS; ++i)
+            {
+                size_t size;
+                int category = i % 100; // 使用循环而不是随机数
+
+                if(category < 60) {
+                    // 小对象：循环使用固定大小
+                    size_t index = (i / 60) % NUM_SMALL;
+                    size = SMALL_SIZES[index];
+                }else if(category < 90) {
+                    // 中对象：循环使用固定大小
+                    size_t index = (i / 30) % NUM_MEDIUM;
+                    size = MEDIUM_SIZES[index];
+                }else{
+                    // 大对象：循环使用固定大小
+                    size_t index = (i / 10) % NUM_LARGE;
+                    size = LARGE_SIZES[index];
+                }
+
+                void* ptr = MemoryPool::allocate(size);
+                // 计算在sizePtrs中的索引
+                size_t ptrIndex = (category < 60) ? (i / 60) % NUM_SMALL :
+                                  (category < 90) ? NUM_SMALL + (i / 30) %NUM_MEDIUM :
+                                  NUM_SMALL + NUM_MEDIUM + (i / 10) % NUM_LARGE;
+                sizePtrs[ptrIndex].push_back({ptr, size});
+
+                // 模拟真实场景：随机释放一些内存
+                if(i % 50 == 0)
+                {
+                    // 随机选择一个大小了了类别进行批量释放
+                    size_t releaseIndex = rand() % sizePtrs.size();
+                    auto& ptrs = sizePtrs[releaseIndex];
+
+                    if(!ptrs.empty())
+                    {
+                        // 释放该大小类别中20%-30%的内存块
+                        size_t releaseCount = ptrs.size() * (20 + (rand() % 11)) / 100;
+                        releaseCount = std::min(releaseCount, ptrs.size());
+
+                        for(size_t j = 0; j < releaseCount; ++j)
+                        {
+                            size_t index = rand() % ptrs.size();
+                            MemoryPool::deallocate(ptrs[index].first, ptrs[index].second);
+                            ptrs[index] = ptrs.back();
+                            ptrs.pop_back();
+                        }
+                    }
+                }
+            }
+
+            // 清理所以剩余内存
+            for(auto& ptrs : sizePtrs)
+            {
+                for(const auto& [ptr, size] : ptrs)
+                {
+                    MemoryPool::deallocate(ptr, size);
+                }
+            }
+
+            std::cout << "Memory Pool: " << std::fixed << std::setprecision(3)
+                      << t.elapsed() << " ms" << std::endl;
+        }
+
+        // 测试new/delete
+        {
+            Timer t;
+            std::array<std::vector<std::pair<void*, size_t>>, NUM_SMALL + NUM_MEDIUM + NUM_LARGE> sizePtrs;
+            for(auto& ptrs : sizePtrs) {
+                ptrs.reserve(NUM_ALLOCS / (NUM_SMALL + NUM_MEDIUM + NUM_LARGE));
+            }
+
+            for(size_t i = 0; i < NUM_ALLOCS; ++i)
+            {
+                size_t size;
+                int category = i % 100; 
+
+                if(category < 60) {
+                    size_t index = (i / 60) % NUM_SMALL;
+                    size = SMALL_SIZES[index];
+                }else if(category < 90) {
+                    size_t index = (i / 30) % NUM_MEDIUM;
+                    size = MEDIUM_SIZES[index];
+                }else{
+                    size_t index = (i / 10) % NUM_LARGE;
+                    size = LARGE_SIZES[index];
+                }
+
+                void* ptr = new char[size];
+                size_t ptrIndex = (category < 60) ? (i / 60) % NUM_SMALL :
+                                    (category < 90) ? NUM_SMALL + (i / 30) %NUM_MEDIUM :
+                                    NUM_SMALL + NUM_MEDIUM + (i / 10) % NUM_LARGE;
+                sizePtrs[ptrIndex].push_back({ptr, size});
+
+                if(i % 50 == 0)
+                {
+                    // 随机选择一个大小了了类别进行批量释放
+                    size_t releaseIndex = rand() % sizePtrs.size();
+                    auto& ptrs = sizePtrs[releaseIndex];
+
+                    if(!ptrs.empty())
+                    {
+                        // 释放该大小类别中20%-30%的内存块
+                        size_t releaseCount = ptrs.size() * (20 + (rand() % 11)) / 100;
+                        releaseCount = std::min(releaseCount, ptrs.size());
+
+                        for(size_t j = 0; j < releaseCount; ++j)
+                        {
+                            size_t index = rand() % ptrs.size();
+                            delete[] static_cast<char*>(ptrs[index].first);
+                            ptrs[index] = ptrs.back();
+                            ptrs.pop_back();
+                        }
+                    }
+                }
+            }
+
+            for(auto& ptrs : sizePtrs)
+            {
+                for(const auto& [ptr, size] : ptrs)
+                {
+                    delete[] static_cast<char*>(ptr);
+                }
+            }
+
+            std::cout << "New/Delete " << std::fixed << std::setprecision(3)
+                      << t.elapsed() << " ms" << std::endl;
+        }
+    }
+};
+
+int main()
+{
+    std::cout << "Starting performance tests..." << std::endl;
+
+    // 预热
+    PerformanceTest::warmup();
+
+    // 运行测试
+    PerformanceTest::testSmallAllocation();
+    PerformanceTest::testMultiThreaded();
+    PerformanceTest::testMixedSizes();
+
+    return 0;
 }
