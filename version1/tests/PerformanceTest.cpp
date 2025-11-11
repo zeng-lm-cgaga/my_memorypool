@@ -70,9 +70,9 @@ public:
         constexpr size_t NUM_ALLOCS = 50000;
         // 使用固定的几个小对象大小，这些大小都是内存池最优化的大小
         const size_t SIZES[] = {8, 16, 32, 64, 128, 256};
-        const size_t NUM_SIZES = sizeof(SIZES) / sizeof(SIZES[0])
+        const size_t NUM_SIZES = sizeof(SIZES) / sizeof(SIZES[0]);
 
-        sdt::cout << "\nTesting small allocation(" << NUM_ALLOCS
+        std::cout << "\nTesting small allocation(" << NUM_ALLOCS
                 << " allocation of fixed sizes);" << std::endl;
 
         // 测试内存池
@@ -108,7 +108,7 @@ public:
             }
 
             // 清理剩余内存
-            for(auro& ptrs : sizePtrs)
+            for(auto& ptrs : sizePtrs)
             {
                 for(const auto& [ptr, size] : ptrs)
                 {
@@ -135,7 +135,7 @@ public:
                 size_t sizeIndex = i % NUM_SIZES;
                 size_t size = SIZES[sizeIndex];
                 void* ptr = new char[size];
-                sizePtrs[sizeIndex].push_back(ptr, size);
+                sizePtrs[sizeIndex].push_back({ptr, size});
 
                 if(i % 4 == 0)
                 {
@@ -145,14 +145,14 @@ public:
                     if(!ptrs.empty())
                     {
                         delete[] static_cast<char*>(ptrs.back().first);
-                        ptrs.pop_back;
+                        ptrs.pop_back();
                     }
                 }
             }
 
             for(auto& ptrs : sizePtrs)
             {
-                for(cons auto & [ptr, size] : ptrs)
+                for(const auto & [ptr, size] : ptrs)
                 {
                     delete[] static_cast<char*>(ptr);
                 }
@@ -169,7 +169,7 @@ public:
         constexpr size_t NUM_THREADS = 4;
         constexpr size_t ALLOCS_PER_THREAD = 25000;
 
-        std::cout << "\nTesting multi-threaded allocations (" << NUM_THREADS;
+        std::cout << "\nTesting multi-threaded allocations (" << NUM_THREADS
                   << "threads, " << ALLOCS_PER_THREAD << " allocations each):"
                   << std::endl;
 
@@ -236,7 +236,7 @@ public:
                     for(int j = 0; j < 50; ++j)
                     {
                         size_t size = SIZES[rand() % NUM_SIZES];
-                        void* ptr = useMemoPool ? MemoryPool::allocate(size);
+                        void* ptr = useMemoPool ? MemoryPool::allocate(size)
                                                 : new char[size];
                         pressurePtrs.push_back({ptr, size});
                     }
@@ -280,12 +280,12 @@ public:
 
             for(size_t i = 0; i < NUM_THREADS; ++i)
             {
-                thread.emplace_back(threadFunc, true);
+                threads.emplace_back(threadFunc, true);
             }
 
-            for(auto& thread : therads)
+            for(auto& thread : threads)
             {
-                thread.join()
+                thread.join();
             }
 
             std::cout << "New/Delete: " << std::fixed << std::setprecision(3)
@@ -299,12 +299,12 @@ public:
 
             for(size_t i = 0; i < NUM_THREADS; ++i)
             {
-                thread.emplace_back(threadFunc, false);
+                threads.emplace_back(threadFunc, false);
             }
 
-            for(auto& thread : therads)
+            for(auto& thread : threads)
             {
-                thread.join()
+                thread.join();
             }
 
             std::cout << "New/Delete: " << std::fixed << std::setprecision(3)
@@ -313,7 +313,7 @@ public:
     }
 
     // 4. 混合大小测试
-    static vid testMixedSizes()
+    static void testMixedSizes()
     {
         constexpr size_t NUM_ALLOCS = 100000;
         // 按照内存池的设计特点，及将大小分为三类
@@ -326,9 +326,9 @@ public:
         const size_t MEDIUM_SIZES[] = {256, 384, 512};
         const size_t LARGE_SIZES[] = {1024, 2048, 4096};
 
-        const size_t NUM_SMALL = size_of(SMALL_SIZES) / size_of(SMALL_SIZES[0]);
-        const size_t NUM_MEDIUM = size_of(MEDIUM_SIZES) / size_of(MEDIUM_SIZES[0]);
-        const size_t NUM_LARGE = size_of(LARGE_SIZES) / size_of(LARGE_SIZES[0]);
+        const size_t NUM_SMALL = sizeof(SMALL_SIZES) / sizeof(SMALL_SIZES[0]);
+        const size_t NUM_MEDIUM = sizeof(MEDIUM_SIZES) / sizeof(MEDIUM_SIZES[0]);
+        const size_t NUM_LARGE = sizeof(LARGE_SIZES) / sizeof(LARGE_SIZES[0]);
 
         std::cout << "\nTesting mixed size allocation (" << NUM_ALLOCS
                   << " allocation with fixed sizes):" << std::endl; 

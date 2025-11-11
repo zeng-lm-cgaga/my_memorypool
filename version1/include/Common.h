@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <atomic>
 #include <array>
+#include <stdlib.h>
 
 // 定义对齐数和最大内存池大小
 namespace  my_memorypool

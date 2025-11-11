@@ -14,7 +14,7 @@ public:
 
     static void deallocate(void* ptr, size_t size)
     {
-        ThreadCache::getInstance->deallocate(ptr,size);
+        ThreadCache::getInstance()->deallocate(ptr,size);
     }
 };
 
