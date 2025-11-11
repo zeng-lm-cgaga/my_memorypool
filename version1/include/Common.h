@@ -9,15 +9,16 @@ namespace  my_memorypool
 {
 constexpr std::size_t ALIGNMENT = 8;
 constexpr std::size_t MAX_BYTES = 256 * 1024; // 256KB
-constexpr std::size_t FREE_LIST_SIZE = MAX_BYTES / ALIGNMENT; // ALIGNMENT等于指针void*的大小
+constexpr std::size_t FREE_LIST_SIZE = MAX_BYTES / ALIGNMENT; // 支持的 size-class 数 = MAX_BYTES / ALIGNMENT（例如 256KB / 8 = 32768 类）
 
 // 内存块头部信息
-struct BlockHeader
+/*struct BlockHeader
 {
     size_t size; //内存块大小
     bool inUse; // 内存块是否被占用
     BlockHeader* next; // 指向下一个内存块的指针
 };
+*/
 
 // 内存块管理（大小）类
 class SizeClass
