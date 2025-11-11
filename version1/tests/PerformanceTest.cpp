@@ -213,7 +213,7 @@ public:
 
                         for(size_t j = 0; j <releaseCount; ++j)
                         {
-                            size_t index = rand() & ptrs.size();
+                            size_t index = rand() % ptrs.size();
                             if(useMemoPool)
                             {
                                 MemoryPool::deallocate(ptrs[index].first, ptrs[index].second);
