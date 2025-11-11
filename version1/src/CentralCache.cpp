@@ -225,9 +225,9 @@ void CentralCache::performDelayReturn(size_t index)
 
 void CentralCache::updateSpanFreeCount(SpanTracker* tracker, size_t newFreeBlocks, size_t index)
 {
-    size_t oldFreeCount = tracker->freeCount.load(std::memory_order_relaxed);
-    size_t newFreeCount = oldFreeCount + newFreeBlocks;
-    tracker->freeCount.store(newFreeCount, std::memory_order_release);
+    // 直接更新为当前在链表中统计到的空闲块数（而非累加历史值）
+    tracker->freeCount.store(newFreeBlocks, std::memory_order_release);
+    size_t newFreeCount = newFreeBlocks;
 
     // 当所有块都空闲时，归还span
     if(newFreeCount == tracker->blockCount.load(std::memory_order_relaxed))
