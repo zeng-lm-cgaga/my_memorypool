@@ -288,7 +288,7 @@ public:
                 thread.join();
             }
 
-            std::cout << "New/Delete: " << std::fixed << std::setprecision(3)
+            std::cout << "MemoryPool: " << std::fixed << std::setprecision(3)
                       << t.elapsed() << " ms" << std::endl;
         }
 
