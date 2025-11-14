@@ -75,30 +75,46 @@ void PageCache::deallocateSpan(void* ptr, size_t numPages)
     //尝试合并相邻的span
     void* nextAddr = static_cast<char*>(ptr) + numPages * PAGE_SIZE;
     auto nextIt = spanMap_.find(nextAddr);
-    if(nextIt != spanMap_.end()) 
+    if (nextIt != spanMap_.end())
     {
         Span* nextSpan = nextIt->second;
-
-        //从空闲列表中移除下一个span
+        
+        // 1. 首先检查nextSpan是否在空闲链表中
+        bool found = false;
         auto& nextList = freeSpans_[nextSpan->numPages];
-        if(nextList == nextSpan) //如果nextSpan是头节点
-        { // 将nextSpan从链表freeSpans_[nextSpan->numPages]中移除
+        
+        // 检查是否是头节点
+        if (nextList == nextSpan)
+        {
             nextList = nextSpan->next;
+            found = true;
         }
-        else // 如果nextSpan不是链表的头节点
+        else if (nextList) // 只有在链表非空时才遍历
         {
             Span* prev = nextList;
-            while(prev->next != nextSpan );
+            while (prev->next)
+            {
+                if (prev->next == nextSpan)
+                {   
+                    // 将nextSpan从空闲链表中移除
+                    prev->next = nextSpan->next;
+                    found = true;
+                    break;
+                }
                 prev = prev->next;
-            prev->next = nextSpan->next;
+            }
         }
 
-        // 合并span
-        span->numPages += nextSpan->numPages;
-        spanMap_.erase(nextAddr);
-        delete nextSpan;
+        // 2. 只有在找到nextSpan的情况下才进行合并
+        if (found)
+        {
+            // 合并span
+            span->numPages += nextSpan->numPages;
+            spanMap_.erase(nextAddr);
+            delete nextSpan;
+        }
     }
-
+    
     // 将合并后的span插入空闲列表
     auto& list = freeSpans_[span->numPages];
     span->next = list;
