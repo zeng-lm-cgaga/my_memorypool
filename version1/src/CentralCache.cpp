@@ -22,6 +22,10 @@ CentralCache::CentralCache()
     {
         lock.clear();
     }
+    for(auto& flag : returnBusy_)
+    {
+        flag.clear();
+    }
     // 初始化延迟归还相关的成员变量
     for(auto& count : delayCounts_)
     {
@@ -40,157 +44,207 @@ void* CentralCache::fetchRange(size_t index)
     if(index >= FREE_LIST_SIZE )
         return nullptr;
 
-    // 自旋锁保护
-    while(locks_[index].test_and_set(std::memory_order_acquire))
+    // 先尝试使用CAS无锁弹出单个块（保持中心链表短小，避免大链返回给线程导致长遍历）
+    size_t casAttempts = 0;
+    while(true)
     {
-        std::this_thread::yield(); // 添加线程让步，避免忙等待，避免过度地消耗CPU
-    }
-
-    void* result = nullptr;
-    try
-    {
-        // 尝试从中心缓存获取内存块
-        result = centralFreeList_[index].load(std::memory_order_relaxed);
-
-        if(!result)
+        void* head = centralFreeList_[index].load(std::memory_order_acquire);
+        if(!head) break; // 进入补给路径
+        void* next = *reinterpret_cast<void**>(head);
+        if(centralFreeList_[index].compare_exchange_weak(
+                head,
+                next,
+                std::memory_order_acq_rel,
+                std::memory_order_acquire))
         {
-            // 如果中心缓存为空，从页缓存获取新的内存块
-            size_t size = (index + 1) * ALIGNMENT;
-            result = fetchFromPageCache(size);
-
-            if(!result)
-            {
-                locks_[index].clear(std::memory_order_release);
-                return nullptr;
-            }
-
-            // 将获取到的内存块切分成小块
-            char* start = static_cast<char*>(result);
-
-            // 计算实际分配页数（size最大为（FREE_LIST_SIZE(32k) * ALIGNMENT(8) == MAX_SIZE(256K))）
-            size_t numPages = (size <= SPAN_PAGES * PageCache::PAGE_SIZE) ?
-                                SPAN_PAGES : (size + PageCache::PAGE_SIZE - 1) / PageCache::PAGE_SIZE;
-            //使用实际页数计算块数
-            size_t blockNum = (numPages * PageCache::PAGE_SIZE) / size;
-
-            if(blockNum >  1)
-            { // 确保至少有两块后再构建链表
-                for(size_t i = 1 ; i < blockNum ; ++i)
-                {
-                    void* current = start + (i - 1) * size;
-                    void* next = start + i * size;
-                    *reinterpret_cast<void**>(current) = next;
-                } 
-                *reinterpret_cast<void**>(start + (blockNum - 1) * size) = nullptr;
-
-                // 保存result的下一个节点
-                void* next = *reinterpret_cast<void**>(result);
-                // 将result与链表断开
-                *reinterpret_cast<void**>(result) = nullptr;         
-                // 更新中心缓存
-                centralFreeList_[index].store(
-                    next,
-                    std::memory_order_release
-                );
-
-                // 使用无锁方式记录span信息
-                // 目的是为了将中心缓存多余内存块归还给页缓存做准备：
-                // 1.CentralCache管理的是小块内存，这些内存可能不连续
-                // 2.PageCache 的 deallocateSpan 要求归还连续的内存
-                size_t trackerIndex = spanCount_++;
-                if(trackerIndex < spanTrackers_.size())
-                {
-                    spanTrackers_[trackerIndex].spanAddr.store(start, std::memory_order_release);
-                    spanTrackers_[trackerIndex].numPages.store(numPages, std::memory_order_release);
-                    spanTrackers_[trackerIndex].blockCount.store(blockNum, std::memory_order_release);
-                    spanTrackers_[trackerIndex].freeCount.store(blockNum-1, std::memory_order_release);
-                }
-            }
-        }
-        else
-        {
-            // 保存result的下一个节点
-            void* next = *reinterpret_cast<void**>(result);
-            // 将result与链表断开
-            *reinterpret_cast<void**>(result) = nullptr;
-
-            // 更新中心缓存
-            centralFreeList_[index].store(next,std::memory_order_release);
-
+            *reinterpret_cast<void**>(head) = nullptr;
             // 更新span的空闲计数
-            SpanTracker* tracker = getSpanTracker(result);
+            SpanTracker* tracker = getSpanTracker(head);
             if(tracker)
             {
-                // 减少一个空闲块
                 tracker->freeCount.fetch_sub(1, std::memory_order_release);
             }
+            return head;
+        }
+        // 竞争失败重试
+        std::this_thread::yield();
+        if(++casAttempts > 1000000)
+        {
+            // 防御性回退：加锁弹出一个节点，顺便校验链表无环
+            while(locks_[index].test_and_set(std::memory_order_acquire))
+            {
+                std::this_thread::yield();
+            }
+            void* lockedHead = centralFreeList_[index].load(std::memory_order_relaxed);
+            if(!lockedHead)
+            {
+                locks_[index].clear(std::memory_order_release);
+                break;
+            }
+            void* lockedNext = *reinterpret_cast<void**>(lockedHead);
+            centralFreeList_[index].store(lockedNext, std::memory_order_release);
+            *reinterpret_cast<void**>(lockedHead) = nullptr;
+            SpanTracker* tracker = getSpanTracker(lockedHead);
+            if(tracker)
+            {
+                tracker->freeCount.fetch_sub(1, std::memory_order_release);
+            }
+            locks_[index].clear(std::memory_order_release);
+            return lockedHead;
         }
     }
-    catch (...)
+
+    // 中心缓存为空：向PageCache补给（不持锁，以减少锁争用）
+    size_t size = (index + 1) * ALIGNMENT;
+    void* spanStart = fetchFromPageCache(size);
+    if(!spanStart) return nullptr;
+
+    // 构建链表并切分成小块
+    char* start = static_cast<char*>(spanStart);
+    size_t numPages = (size <= SPAN_PAGES * PageCache::PAGE_SIZE) ?
+                        SPAN_PAGES : (size + PageCache::PAGE_SIZE - 1) / PageCache::PAGE_SIZE;
+    size_t blockNum = (numPages * PageCache::PAGE_SIZE) / size;
+
+    if(blockNum == 0)
     {
-        locks_[index].clear(std::memory_order_release);
-        throw;
+        return nullptr;
     }
 
-    // 释放锁
-    locks_[index].clear(std::memory_order_release);
+    void* last = nullptr;
+    for(size_t i = 1 ; i < blockNum ; ++i)
+    {
+        void* current = start + (i - 1) * size;
+        void* next = start + i * size;
+        *reinterpret_cast<void**>(current) = next;
+    }
+    last = start + (blockNum - 1) * size;
+    *reinterpret_cast<void**>(last) = nullptr;
+
+    // 取一块返回，其余推回中心链表
+    void* result = start;
+    void* remainStart = *reinterpret_cast<void**>(result);
+    *reinterpret_cast<void**>(result) = nullptr;
+
+    if(remainStart)
+    {
+        void* remainEnd = last;
+        while(true)
+        {
+            void* head = centralFreeList_[index].load(std::memory_order_acquire);
+            *reinterpret_cast<void**>(remainEnd) = head;
+            if(centralFreeList_[index].compare_exchange_weak(
+                    head,
+                    remainStart,
+                    std::memory_order_release,
+                    std::memory_order_acquire))
+            {
+                break;
+            }
+            std::this_thread::yield();
+        }
+    }
+
+    // 记录span信息供延迟归还判定
+    size_t trackerIndex = spanCount_.fetch_add(1, std::memory_order_relaxed);
+    if(trackerIndex < spanTrackers_.size())
+    {
+        spanTrackers_[trackerIndex].spanAddr.store(start, std::memory_order_release);
+        spanTrackers_[trackerIndex].numPages.store(numPages, std::memory_order_release);
+        spanTrackers_[trackerIndex].blockCount.store(blockNum, std::memory_order_release);
+        // 剩余块数（central里已有 blockNum-1 块）
+        spanTrackers_[trackerIndex].freeCount.store((blockNum > 0) ? (blockNum - 1) : 0, std::memory_order_release);
+    }
+    else
+    {
+        spanCount_.store(spanTrackers_.size(), std::memory_order_relaxed);
+    }
+
     return result;
 } 
 
 void CentralCache::returnRange(void* start, size_t size, size_t index)
 {
     if(!start || index >= FREE_LIST_SIZE)
+    {
         return;
+    }
 
         size_t blockSize = (index + 1) * ALIGNMENT;
         size_t blockCount = size / blockSize;
 
-        while(locks_[index].test_and_set(std::memory_order_acquire))
-        {
-            std::this_thread::yield();
+        // 1) 无锁将归还链表推入中心缓存（range push with CAS），并强制链尾截断避免循环
+        void* end = start;
+        size_t count = 1;
+        while(*reinterpret_cast<void**>(end) != nullptr && count < blockCount) {
+            end = *reinterpret_cast<void**>(end);
+            count++;
         }
+        // 强制截断来链，确保是以nullptr结束
+        *reinterpret_cast<void**>(end) = nullptr;
 
-        try
+        size_t casAttempts = 0;
+        while(true)
         {
-            // 1. 将归还的链表连接到中心缓存
-            void* end = start;
-            size_t count = 1;
-            while(*reinterpret_cast<void**>(end) != nullptr && count < blockCount) {
-                end = *reinterpret_cast<void**>(end);
-                count++;
-            }
-            void* current = centralFreeList_[index].load(std::memory_order_relaxed);
-            *reinterpret_cast<void**>(end) = current; // 头插法（将原有链表接在归还链表后边）
-            centralFreeList_[index].store(start, std::memory_order_release);
-
-            // 2. 更新延迟计数
-            size_t currentCount = delayCounts_[index].fetch_add(1, std::memory_order_relaxed) + 1;
-            auto currentTime =std::chrono::steady_clock::now();
-
-            // 3. 检查是否需要执行延迟归还
-            if(shouldPerformDelayedReturn(index, currentCount, currentTime))
+            void* head = centralFreeList_[index].load(std::memory_order_acquire);
+            *reinterpret_cast<void**>(end) = head;
+            if(centralFreeList_[index].compare_exchange_weak(
+                    head,
+                    start,
+                    std::memory_order_release,
+                    std::memory_order_acquire))
             {
-                performDelayReturn(index);
+                break;
+            }
+            std::this_thread::yield();
+            if(++casAttempts > 1000000)
+            {
+                // 防御性回退：持锁推入，避免CAS饥饿
+                while(locks_[index].test_and_set(std::memory_order_acquire))
+                {
+                    std::this_thread::yield();
+                }
+                void* headLocked = centralFreeList_[index].load(std::memory_order_relaxed);
+                *reinterpret_cast<void**>(end) = headLocked;
+                centralFreeList_[index].store(start, std::memory_order_release);
+                locks_[index].clear(std::memory_order_release);
+                break;
             }
         }
-        catch (...)
-        {
-            locks_[index].clear(std::memory_order_release);
-            throw;
-        }
 
-        locks_[index].clear(std::memory_order_release);
+        // 2) 更新延迟计数与时间戳（不持锁）
+        size_t currentCount = delayCounts_[index].fetch_add(1, std::memory_order_relaxed) + 1;
+        auto currentTime = std::chrono::steady_clock::now();
+
+        // 3) 如触发延迟归还，仅在该阶段短暂持锁以进行遍历与移除；并限制同一大小类仅一个线程执行
+        if(shouldPerformDelayedReturn(index, currentCount, currentTime))
+        {
+            if(!returnBusy_[index].test_and_set(std::memory_order_acquire))
+            {
+                while(locks_[index].test_and_set(std::memory_order_acquire))
+                {
+                    std::this_thread::yield();
+                }
+                try
+                {
+                    performDelayReturn(index);
+                }
+                catch(...)
+                {
+                    locks_[index].clear(std::memory_order_release);
+                    returnBusy_[index].clear(std::memory_order_release);
+                    throw;
+                }
+                locks_[index].clear(std::memory_order_release);
+                returnBusy_[index].clear(std::memory_order_release);
+            }
+        }
 }
 
 bool CentralCache::shouldPerformDelayedReturn(size_t index, size_t currentCount, 
         std::chrono::steady_clock::time_point currentTime)
 {
-    // 基于计数和时间的双重检查
-    if(currentCount >= MAX_DELAY_COUNT)
-    {
-        return true;
-    }
-
+    // 更保守：同时满足计数与时间间隔，减少频繁触发
+    if(currentCount < MAX_DELAY_COUNT) return false;
     auto lastTime = lastReturnTimes_[index];
     return (currentTime - lastTime) >= DELAY_INTERVAL;
 }
@@ -205,8 +259,9 @@ void CentralCache::performDelayReturn(size_t index)
     // 统计每个span的空闲块数
     std::unordered_map<SpanTracker*, size_t> spanFreeCounts;
     void* currentBlock = centralFreeList_[index].load(std::memory_order_relaxed);
+    size_t scanBudget = 1000000; // 防御性扫描上限，避免异常环导致长时间阻塞
 
-    while(currentBlock)
+    while(currentBlock && scanBudget--)
     {
         SpanTracker* tracker = getSpanTracker(currentBlock);
         if(tracker)
@@ -214,6 +269,12 @@ void CentralCache::performDelayReturn(size_t index)
             spanFreeCounts[tracker]++;
         }
         currentBlock = *reinterpret_cast<void**>(currentBlock);
+    }
+
+    if(scanBudget == 0)
+    {
+        // 遇到异常超长/循环链表，直接退出本次归还，等待后续周期再尝试
+        return;
     }
 
     // 更新每个span的空闲计数并检查是否可以归还
@@ -288,8 +349,11 @@ void* CentralCache::fetchFromPageCache(size_t size)
 
 SpanTracker* CentralCache::getSpanTracker(void* blockAddr)
 {
-    // 遍历spanTrackers_数组，找到blockAddr所属的span
-    for(size_t i = 0 ; i < spanCount_.load(std::memory_order_relaxed); ++i)
+    // 避免越界：只遍历有效范围
+    size_t limit = spanCount_.load(std::memory_order_relaxed);
+    if(limit > spanTrackers_.size()) limit = spanTrackers_.size();
+
+    for(size_t i = 0 ; i < limit; ++i)
     {
         void* spanAddr = spanTrackers_[i].spanAddr.load(std::memory_order_relaxed);
         size_t numPages = spanTrackers_[i].numPages.load(std::memory_order_relaxed);

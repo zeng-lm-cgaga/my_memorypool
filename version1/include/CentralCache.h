@@ -47,6 +47,8 @@ private:
 
     // 用于同步的自旋锁
     std::array<std::atomic_flag,FREE_LIST_SIZE> locks_;
+    // 延迟归还的并发保护：每个大小类仅允许一个线程执行归还扫描
+    std::array<std::atomic_flag,FREE_LIST_SIZE> returnBusy_;
 
     // 使用数组存储span信息，避免map的开销
     std::array<SpanTracker, 1024> spanTrackers_;
