@@ -62,6 +62,7 @@ void* PageCache::allocateSpan(size_t numPages)
     return memory;
 }
 
+//添加对前向空闲页的合并机制
 void PageCache::deallocateSpan(void* ptr, size_t numPages)
 {
     std::lock_guard<std::mutex> lock(mutex_);
