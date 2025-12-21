@@ -4,6 +4,8 @@
 #include <thread>
 #include <chrono>
 
+// 添加CAS策略，减少线程持有锁的时间，提高了多线程测试时的性能
+
 namespace my_memorypool
 {
 
