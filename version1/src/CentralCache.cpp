@@ -70,7 +70,7 @@ void* CentralCache::fetchRange(size_t index)
         }
         // 竞争失败重试
         std::this_thread::yield();
-        if(++casAttempts > 1000000)
+        if(++casAttempts > 100)
         {
             // 防御性回退：加锁弹出一个节点，顺便校验链表无环
             while(locks_[index].test_and_set(std::memory_order_acquire))
