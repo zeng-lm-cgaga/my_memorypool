@@ -26,7 +26,14 @@ public:
         return instance;
     }
 
-    void* fetchRange(size_t index);
+    // 从中心缓存获取一定数量的内存对象
+    // boot: 输出参数，返回获取到的第一个对象
+    // batchNum: 输入期望获取的数量，输出实际获取的数量
+    // 返回值: 获取到的对象的字节总数（用于更新统计，可选）或者返回实际获取数量
+    size_t fetchRange(void*& start, void*& end, size_t batchNum, size_t index);
+    
+    // 原接口为了兼容性先保留，或者直接删除替换
+    // void* fetchRange(size_t index); 
     void returnRange(void* start, size_t size, size_t index);
 
 private:

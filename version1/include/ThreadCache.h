@@ -25,7 +25,7 @@ private:
     }   
 
     // 从中心缓存获取内存
-    void* fetchFromCentralCache(size_t index);
+    void* fetchFromCentralCache(size_t index, size_t size);
     // 归还内存到中心缓存
     void returnToCentralCache(void* start, size_t size);
 

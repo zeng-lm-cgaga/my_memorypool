@@ -11,6 +11,10 @@ constexpr std::size_t ALIGNMENT = 8;
 constexpr std::size_t MAX_BYTES = 256 * 1024; // 256KB
 constexpr std::size_t FREE_LIST_SIZE = MAX_BYTES / ALIGNMENT; // 支持的 size-class 数 = MAX_BYTES / ALIGNMENT（例如 256KB / 8 = 32768 类）
 
+// 性能优先：关闭 Span 追踪（用于 benchmark 场景）
+// 关闭后将减少大量 getSpanTracker 扫描与原子操作开销，但也会禁用延迟回收机制。
+#define ENABLE_SPAN_TRACKING 0
+
 // 内存块头部信息
 /*struct BlockHeader
 {

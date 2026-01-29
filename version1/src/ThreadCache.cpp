@@ -1,5 +1,6 @@
 #include "../include/ThreadCache.h"
 #include "../include/CentralCache.h"
+#include <cassert>
 
 namespace my_memorypool
 {
@@ -20,19 +21,21 @@ void* ThreadCache::allocate(size_t size)
 
     size_t index = SizeClass::getIndex(size);
 
-    // 更新对应自由链表的长度计数
-    freeListSize_[index]--;
-
     // 检查线程本地自由链表
     // 如果 freeList_[index] 不为，表示该链表中有可用内存块
     if(void* ptr = freeList_[index])
     {
         freeList_[index] = *reinterpret_cast<void**>(ptr); // 将freeList_[index]指向的内存块的下一个内存块地址（取决与内存块的实现）
+        // 只有成功弹出时才减少计数
+        if (freeListSize_[index] > 0)
+        {
+            freeListSize_[index]--;
+        }
         return ptr;
     }
 
     // 如果线程本地自由链表为空，则从中心缓存获取一批内存
-    return fetchFromCentralCache(index);
+    return fetchFromCentralCache(index, size);
 }
 
 void ThreadCache::deallocate(void* ptr, size_t size)
@@ -67,29 +70,51 @@ bool ThreadCache::shouldReturnToCentralCache(size_t index)
     return (freeListSize_[index] > threadcnt);
 }
 
-void* ThreadCache::fetchFromCentralCache(size_t index)
+void* ThreadCache::fetchFromCentralCache(size_t index, size_t size)
 {
+    // 慢启动策略：
+    // 如果需要的内存块较小，我们也不一次拿太多，避免浪费
+    // 随着 freeListSize_[index] 增长，或者根据 MaxLimit 动态调整
+    // 简单起见，我们根据 size 大小决定一次拿多少
+    // 比如：小对象(<=64B)一次拿 512 个，中对象(<=4KB)一次拿 64 个
+    
+    // 计算 ThreadCache 最大容量限制 (这里先硬编码简单逻辑)
+    size_t batchNum = 1;
+    if (size <= 64) batchNum = 512;
+    else if (size <= 512) batchNum = 128;
+    else if (size <= 4096) batchNum = 32;
+    else batchNum = 4; // 大块少拿点
+
+    void* start = nullptr;
+    void* end = nullptr;
+    
     // 从中心缓存批量获取内存
-    void* start = CentralCache::getInstance().fetchRange(index);
-    if(!start) return nullptr;
+    size_t actualNum = CentralCache::getInstance().fetchRange(start, end, batchNum, index);
+    if(actualNum == 0) return nullptr;
 
-    // 取一个返回，其余放入自由链表
+    assert(start != nullptr);
+    assert(end != nullptr);
+
+    // 取一个返回给 threadAlloc
     void* result = start;
-    freeList_[index] = *reinterpret_cast<void**>(start);
-
-    // 更新自由链表大小
-    size_t batchNum = 0;
-    void* current = start; // 从start开始遍历
-
-    // 计算从中心缓存获取的内存块数量
-    while(current != nullptr)
-    {
-        batchNum++;
-        current = *reinterpret_cast<void**>(current);
+    if (actualNum == 1) {
+        // 只有一个，没有剩余
+    } else {
+        // 将剩下的放入 freeList
+        void* remainStart = *reinterpret_cast<void**>(result);
+        // result 的 next 置空
+        //*reinterpret_cast<void**>(result) = nullptr; // 实际上不需要，调用者会覆盖
+        
+        // 将链表[remainStart ... end] 插入 freeList_ 头部
+        if (remainStart) {
+             // 找到 end (实际上 fetchRange 自带了 end 指针，它指向的是这批链表的最后一个节点)
+             // end 的 next 应该接到旧的 freeList_ 上
+             *reinterpret_cast<void**>(end) = freeList_[index];
+             freeList_[index] = remainStart;
+             
+             freeListSize_[index] += (actualNum - 1);
+        }
     }
-
-    // 更新freeListSize_，增加获取的内存块数量
-    freeListSize_[index] += batchNum;
 
     return result;
 }

@@ -166,8 +166,8 @@ void * PageCache::systemAlloc(size_t numPages)
                     MAP_PRIVATE | MAP_ANONYMOUS, -1 , 0);
     if(ptr == MAP_FAILED) return nullptr;
 
-    //清零内存
-    memset(ptr, 0, size);
+    // 移除强制清零，避免不必要的性能开销
+    // memset(ptr, 0, size);
     return ptr;
 }
 
