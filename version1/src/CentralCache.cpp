@@ -69,36 +69,10 @@ size_t CentralCache::fetchRange(void*& start, void*& end, size_t batchNum, size_
         while(locks_[index].test_and_set(std::memory_order_acquire)) {
             std::this_thread::yield(); 
         }
-<<<<<<< HEAD
-        // 竞争失败重试
-        std::this_thread::yield();
-        if(++casAttempts > 100)
-        {
-            // 防御性回退：加锁弹出一个节点，顺便校验链表无环
-            while(locks_[index].test_and_set(std::memory_order_acquire))
-            {
-                std::this_thread::yield();
-            }
-            void* lockedHead = centralFreeList_[index].load(std::memory_order_relaxed);
-            if(!lockedHead)
-            {
-                locks_[index].clear(std::memory_order_release);
-                break;
-            }
-            void* lockedNext = *reinterpret_cast<void**>(lockedHead);
-            centralFreeList_[index].store(lockedNext, std::memory_order_release);
-            *reinterpret_cast<void**>(lockedHead) = nullptr;
-            SpanTracker* tracker = getSpanTracker(lockedHead);
-            if(tracker)
-            {
-                tracker->freeCount.fetch_sub(1, std::memory_order_release);
-            }
-=======
 
         // 双重检查
         head = centralFreeList_[index].load(std::memory_order_relaxed);
         if (head == nullptr) {
->>>>>>> 25feeaa (添加qt可视化界面)
             locks_[index].clear(std::memory_order_release);
             break; // 真的没空闲了
         }
