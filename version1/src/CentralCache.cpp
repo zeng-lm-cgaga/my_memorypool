@@ -55,17 +55,6 @@ size_t CentralCache::fetchRange(void*& start, void*& end, size_t batchNum, size_
         void* head = centralFreeList_[index].load(std::memory_order_acquire);
         if(!head) break; // 若为空，转到 PageCache 申请
 
-        // 尝试只取一个，简化无锁逻辑 (获取多个稍微复杂，这里为了稳定性先取一个或全部)
-        // 实际上，为了ThreadCache批量获取，我们需要遍历链表找到第 N 个节点
-        
-        // 由于是无锁单向链表，遍历寻找切分点比较耗时且危险（因为可能有并发push/pop）
-        // 策略优化：
-        // 简单策略：只取一个（不修改 current logic），然后多次调用？否，那样会有多次 CAS。
-        // 进阶策略：使用自旋锁保护整个链表操作，一次性取走一批。
-        
-        // 鉴于我们之前为了性能用了 CAS，但在批量获取场景下，CAS 很难一次性拿到 N 个。
-        // 让我回退到使用自旋锁 locks_[index] 来安全地获取一批。
-
         while(locks_[index].test_and_set(std::memory_order_acquire)) {
             std::this_thread::yield(); 
         }
@@ -148,28 +137,9 @@ size_t CentralCache::fetchRange(void*& start, void*& end, size_t batchNum, size_
     // 上限控制，比如单次 span 最大 512KB (128页)
     if (minPages > 128) minPages = 128;
 
-    // 更新 fetchFromPageCache 调用逻辑 (需确保 fetchFromPageCache 支持传入 numPages 而不是自动计算)
-    // 但目前 fetchFromPageCache(size) 是根据 object size 自动决定的吗？
-    // 让我们看 ThreadCache.cpp 中 fetchFromCentralCache 调用的 CentralCache::fetchRange
-    // 然后这里调用 fetchFromPageCache(size)。
-    // 读代码发现 fetchFromPageCache 实际上是 fetchFromPageCache(size_t classSize)? 
-    // 不，看 PageCache.h 的 allocateSpan(numPages)。
-    // CentralCache::fetchFromPageCache 是个私有辅助函数吗？ 
-    // 让我检查 CentralCache.h，好像没看到 fetchFromPageCache 的声明。
-    // 但是代码里调用了 `void* spanStart = fetchFromPageCache(size);`
-    // 这可能是我之前没有读到的辅助函数。 
-    // 假设它是存在的。
-    
-    // 如果 fetchFromPageCache 内部只是简单计算 numPages，那我们需要改写它，或者直接计算 numPages 然后调用 PageCache::getInstance().allocateSpan(numPages)。
-    
+  
     void* spanStart = nullptr;
     size_t numPages = minPages;
-    
-    // 我们直接绕过辅助函数，手动计算并请求 PageCache，这样才准确
-    // 但 fetchFromPageCache 可能有锁或其他逻辑？
-    // 读不到 fetchFromPageCache 的定义，我假设它是内联在 CentralCache.cpp 里的还是？
-    // 之前 read_file 没读到 fetchFromPageCache 的定义。可能是在文件底部？
-    // 无论如何，直接调用 PageCache::allocateSpan 是最稳的。
     
     spanStart = PageCache::getInstance().allocateSpan(numPages);
     if(!spanStart) return 0;
@@ -233,10 +203,6 @@ size_t CentralCache::fetchRange(void*& start, void*& end, size_t batchNum, size_
         spanTrackers_[trackerIndex].spanAddr.store(base, std::memory_order_release);
         spanTrackers_[trackerIndex].numPages.store(numPages, std::memory_order_release);
         spanTrackers_[trackerIndex].blockCount.store(blockNum, std::memory_order_release);
-        // 新 span 中被 ThreadCache 拿走了 actualNum 个，剩下的 blockNum - actualNum 个在 Central 中（也就是空闲）
-        // 实际上这部分被 ThreadCache 拿走的属于 "In Use"，Central 中的属于 "Free"
-        // 原逻辑 freeCount 初始为 blockNum - 1 (因为拿走了一个)
-        // 现逻辑 freeCount 初始为 blockNum - actualNum
         spanTrackers_[trackerIndex].freeCount.store(blockNum - actualNum, std::memory_order_release);
     }
     else
@@ -249,10 +215,6 @@ size_t CentralCache::fetchRange(void*& start, void*& end, size_t batchNum, size_
     return actualNum;
 } 
 
-// void* CentralCache::fetchRange(size_t index)
-// {
-//     原函数已废弃
-// }
 
 void CentralCache::returnRange(void* start, size_t size, size_t index)
 {
@@ -303,54 +265,6 @@ void CentralCache::returnRange(void* start, size_t size, size_t index)
                 break;
             }
         }
-
-        // 2) 更新延迟计数与时间戳（不持锁）
-        // size_t currentCount = delayCounts_[index].fetch_add(1, std::memory_order_relaxed) + 1;
-        // auto currentTime = std::chrono::steady_clock::now();
-
-        // 3) 暂时禁用 O(N) 的 DelayedReturn 扫描，因为它在长链表下会导致极大的性能损耗。
-        // 对于 benchmark 场景，我们优先保证吞吐量。
-        // 在未来的优化中，应重构 CentralCache 为 Span 链表结构，以实现 O(1) 的回收。
-        /*
-        if(shouldPerformDelayedReturn(index, currentCount, currentTime))
-        {
-            if(!returnBusy_[index].test_and_set(std::memory_order_acquire))
-            {
-                 // ...
-            }
-        }
-        */
-        
-        // 替代方案：在 returnRange 中直接批量更新 SpanTracker 的计数 (仅计数，不回收 Span)
-        // 这样可以保持统计数据的准确性，且开销极低
-        /*
-        void* curr = start;
-        SpanTracker* lastTracker = nullptr;
-        size_t batchCount = 0;
-
-        while(curr) {
-            SpanTracker* tracker = getSpanTracker(curr);
-            if (tracker != lastTracker) {
-                if (lastTracker && batchCount > 0) {
-                    lastTracker->freeCount.fetch_add(batchCount, std::memory_order_release);
-                }
-                lastTracker = tracker;
-                batchCount = 0;
-            }
-            if (tracker) batchCount++;
-            
-            // 下一个节点。注意：这里我们不需要锁，因为虽然链表在 CentralCache 中可能被并发访问，
-            // 但我们刚才只是 push 了这一段进去。
-            // 等等，一旦 push 进 centralFreeList_，其他线程可能立马把它 pop 出去并修改 next 指针！
-            // 所以一旦 push 成功，我们就不能再安全地遍历 start...end 了（除非我们确定这一段还在我们手里）。
-            // 哎呀！上面的 CAS push 成功后，start...end 就归 CentralCache 所有了，可能瞬间被拿走。
-            
-            // 所以：必须在 push 之前计算好 tracker 更新！
-            
-            // 逻辑修正：不能在这里遍历。必须在 push 之前。
-            break; 
-        }
-        */
 }
 
 bool CentralCache::shouldPerformDelayedReturn(size_t index, size_t currentCount, 
