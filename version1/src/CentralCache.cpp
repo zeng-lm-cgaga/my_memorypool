@@ -226,17 +226,18 @@ void CentralCache::returnRange(void* start, size_t size, size_t index)
         size_t blockSize = (index + 1) * ALIGNMENT;
         size_t blockCount = size / blockSize;
 
-        // 1) 仅定位链表尾部（benchmark 模式下不做 Span 追踪）
+        // 1) 定位链表尾部，同时统计实际块数
         void* end = start;
         size_t endCount = 1;
         while(*reinterpret_cast<void**>(end) != nullptr && endCount < blockCount) {
             end = *reinterpret_cast<void**>(end);
             endCount++;
         }
-        
-        // 强制截断来链，确保是以nullptr结束
+
+        // 强制截断链，确保以nullptr结束
         *reinterpret_cast<void**>(end) = nullptr;
 
+        // 2) CAS 无锁入链
         size_t casAttempts = 0;
         while(true)
         {
@@ -265,6 +266,22 @@ void CentralCache::returnRange(void* start, size_t size, size_t index)
                 break;
             }
         }
+
+#if ENABLE_SPAN_TRACKING
+        // 3) 累加延迟归还计数，达到阈值时尝试触发 Span 扫描回收
+        size_t prevCount = delayCounts_[index].fetch_add(endCount, std::memory_order_relaxed);
+        size_t currentCount = prevCount + endCount;
+        auto now = std::chrono::steady_clock::now();
+        if (shouldPerformDelayedReturn(index, currentCount, now))
+        {
+            // atomic_flag::test_and_set 返回旧值，false=获取成功
+            if (!returnBusy_[index].test_and_set(std::memory_order_acquire))
+            {
+                performDelayReturn(index);
+                returnBusy_[index].clear(std::memory_order_release);
+            }
+        }
+#endif
 }
 
 bool CentralCache::shouldPerformDelayedReturn(size_t index, size_t currentCount, 
@@ -278,15 +295,15 @@ bool CentralCache::shouldPerformDelayedReturn(size_t index, size_t currentCount,
 
 void CentralCache::performDelayReturn(size_t index)
 {
-    // 重置延迟计数
-    delayCounts_[index].store(0,std::memory_order_relaxed);
-    // 更新最后归还时间
+    // 重置延迟计数，更新最后归还时间
+    delayCounts_[index].store(0, std::memory_order_relaxed);
     lastReturnTimes_[index] = std::chrono::steady_clock::now();
 
-    // 统计每个span的空闲块数
+    // 扫描 centralFreeList_ 统计每个 span 的空闲块数
+    // 扫描不加锁，属于 best-effort 启发式统计
     std::unordered_map<SpanTracker*, size_t> spanFreeCounts;
     void* currentBlock = centralFreeList_[index].load(std::memory_order_relaxed);
-    size_t scanBudget = 1000000; // 防御性扫描上限，避免异常环导致长时间阻塞
+    size_t scanBudget = 1000000;
 
     while(currentBlock && scanBudget--)
     {
@@ -300,15 +317,19 @@ void CentralCache::performDelayReturn(size_t index)
 
     if(scanBudget == 0)
     {
-        // 遇到异常超长/循环链表，直接退出本次归还，等待后续周期再尝试
         return;
     }
 
-    // 更新每个span的空闲计数并检查是否可以归还
+    // 持锁批量处理 span 回收，避免与 fetchRange 并发修改链表
+    while(locks_[index].test_and_set(std::memory_order_acquire))
+    {
+        std::this_thread::yield();
+    }
     for(const auto& [tracker, newFreeBlocks] : spanFreeCounts)
     {
-        updateSpanFreeCount(tracker,newFreeBlocks,index);
+        updateSpanFreeCount(tracker, newFreeBlocks, index);
     }
+    locks_[index].clear(std::memory_order_release);
 }
 
 void CentralCache::updateSpanFreeCount(SpanTracker* tracker, size_t newFreeBlocks, size_t index)

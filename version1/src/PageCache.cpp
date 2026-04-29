@@ -1,4 +1,9 @@
+#ifdef _WIN32
+#define NOMINMAX
+#include <windows.h>
+#else
 #include <sys/mman.h>
+#endif
 #include "PageCache.h"
 #include <cstring>
 
@@ -161,13 +166,13 @@ void * PageCache::systemAlloc(size_t numPages)
 {
     size_t size = numPages * PAGE_SIZE;
 
-    //使用mmap分配内存
+#ifdef _WIN32
+    void* ptr = VirtualAlloc(nullptr, size, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+#else
     void* ptr = mmap(nullptr, size, PROT_READ | PROT_WRITE,
                     MAP_PRIVATE | MAP_ANONYMOUS, -1 , 0);
     if(ptr == MAP_FAILED) return nullptr;
-
-    // 移除强制清零，避免不必要的性能开销
-    // memset(ptr, 0, size);
+#endif
     return ptr;
 }
 

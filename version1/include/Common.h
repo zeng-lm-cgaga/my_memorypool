@@ -13,7 +13,10 @@ constexpr std::size_t FREE_LIST_SIZE = MAX_BYTES / ALIGNMENT; // 支持的 size-
 
 // 性能优先：关闭 Span 追踪（用于 benchmark 场景）
 // 关闭后将减少大量 getSpanTracker 扫描与原子操作开销，但也会禁用延迟回收机制。
-#define ENABLE_SPAN_TRACKING 0
+// ENABLE_SPAN_TRACKING 由 CMake 选项控制（默认 ON），也可在此强制关闭
+#ifndef ENABLE_SPAN_TRACKING
+#define ENABLE_SPAN_TRACKING 1
+#endif
 
 // 内存块头部信息
 /*struct BlockHeader

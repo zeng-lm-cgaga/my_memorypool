@@ -5,8 +5,24 @@ project(my_memorypool)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# 编译选项
-add_compile_options(-Wall -O2)
+# Span 追踪选项：开启后启用延迟回收机制（默认 ON），-DENABLE_SPAN_TRACKING=OFF 可关闭
+option(ENABLE_SPAN_TRACKING "Enable span-level tracking for delayed page return" ON)
+if(ENABLE_SPAN_TRACKING)
+    add_compile_definitions(ENABLE_SPAN_TRACKING=1)
+else()
+    add_compile_definitions(ENABLE_SPAN_TRACKING=0)
+endif()
+
+# 编译选项（Release 默认开启优化；Debug 保留运行时检查）
+if(NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Release)
+endif()
+add_compile_options(-Wall)
+if(MSVC)
+    add_compile_options(/W4 /O2)
+else()
+    add_compile_options(-O2)
+endif()
 
 # 查找pthread库
 find_package(Threads REQUIRED)
